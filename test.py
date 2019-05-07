@@ -84,7 +84,7 @@ def t_GetCompanyStockTrend(CompanyName, frequency = 10):
   
   return List_Price_Up, List_Price_Down, List_Price_NoReaction
 
-# 決定某間公司 in 2018 哪些日子起漲/起跌/不明顯
+# 決定某間公司哪些日子起漲/起跌/不明顯
 def t_GetIntersection(companyName):
   '''
   找出週均線和月均線的交叉點
@@ -278,16 +278,207 @@ with open('stopword.txt', 'r', encoding = 'utf-8') as f1:
     stopwords.append(line.strip())
 stopwords[-1] = ' '
 
-
 StockTrend = {}
 t_StockTrend = {}
 for company in Companies:
   stock = company2Stock[company]
-#   UpTime, DownTime = GetCompanyStockTrend(stock)
   UpTime, DownTime, NoReaction = GetCompanyStockTrend(stock)
   t_UpTime, t_DownTime, t_NoReaction = t_GetCompanyStockTrend(stock)
   StockTrend[company] = { "up" : UpTime, "down" : DownTime, "NotObvious" : NoReaction}
   t_StockTrend[company] = { "up" : t_UpTime, "down" : t_DownTime, "NotObvious" : t_NoReaction}
+
+CompanyArticles = {}
+TestArticles = {}
+for company in Companies:
+  # 製作出company (ex.台塑) 的time2content[time] = 文章
+  raw_data = x2.parse(company).dropna()
+  raw_company_content = EnhanceTitleWeight(raw_data).tolist() 
+  raw_company_content_time = raw_data["post_time"].tolist()
+  del raw_data
+  
+  company_content_time = []
+  for i in raw_company_content_time:
+    company_content_time.append(i[:9])
+  time2content = dict()
+  for i, time in enumerate(company_content_time):
+    if time in time2content:
+      time2content[time] += raw_company_content[i]
+    else:
+      time2content[time] = raw_company_content[i]
+
   up, down, up_down_not_obvious = GetArticleFrom(StockTrend, company)
-  t_up, t_down, t_up_down_not_obvious = GetArticleFrom(RealAnswer, company)
+  t_up, t_down, t_up_down_not_obvious = GetArticleFrom(t_StockTrend, company)
   CompanyArticles[company] = {"up": up, "down" : down, "up_down_not_obvious" : up_down_not_obvious}
+  TestArticles[company] = {"up": t_up, "down" : t_down, "up_down_not_obvious" : t_up_down_not_obvious}
+
+def lcs(str_a, str_b):
+  if len(str_a) == 0 or len(str_b) == 0:
+    return 0
+  
+  lcs_str=""
+  max_len = 0
+  
+  dp = [0 for _ in range(len(str_b) + 1)]
+  for i in range(1, len(str_a) + 1):
+    left_up = 0
+    for j in range(1, len(str_b) + 1):
+      up = dp[j]
+      if str_a[i-1] == str_b[j-1]:
+        dp[j] = left_up + 1
+        max_len = max([max_len, dp[j]])
+        if max_len == dp[j]:
+          lcs_str = str_a[i-max_len:i]
+      else:
+        dp[j] = 0
+      left_up = up
+  return str(lcs_str)
+
+def merge(str_a, str_b):   
+#contain one another
+  if(str_a in str_b):
+    return str_b
+  elif(str_b in str_a):
+    return str_a
+
+  result=""
+  dup=lcs(str_a,str_b)
+
+  s1=str_a.find(dup)
+  s2=str_b.find(dup)
+  e1=s1+len(dup)
+  e2=s2+len(dup)
+  
+  if(s1 > s2 and (e1 == len(str_a))):
+    result=str_a+str_b[s2+len(dup):len(str_b)]
+  elif(s2 > s1 and (e2 == len(str_b))):
+    result=str_b+str_a[s1+len(dup):len(str_a)]
+
+  return result
+
+def get_tfidf_tool(corpus, top = 30):
+    '''
+    input: corpus 文章 List（ex. 所有台塑的看漲文章 CompanyArticles['台塑']["up"]）
+    return: 前top個排序過的關鍵字
+    '''
+    vectorizer = TfidfVectorizer(tokenizer = jieba.cut, analyzer = 'word', min_df = 2, stop_words = stopwords)
+    X = vectorizer.fit_transform(corpus)
+    m = X.mean(axis=0).getA().reshape(-1)
+    max_indexs = np.argsort(m)[::-1]
+    tokens = np.array(vectorizer.get_feature_names())
+    
+    terms = vectorizer.get_feature_names()
+
+    for i in range(len(terms)-16):
+        for j in range(i+1, i+15):
+            a = len(terms[i])
+            b = len(terms[j])
+            d = lcs(str(terms[i]), str(terms[j]))
+            c = len(str(d))
+            if(a+b-c!=0):
+                if((c/(a+b-c)) >= 0.6):
+                    terms[i]= (merge(str(terms[i]), str(terms[j])))
+
+    sums = X.sum(axis=0)
+    data = []
+    for col, term in enumerate(terms):
+        data.append((term, sums[0, col], sums[0, col]))
+    ranking = pd.DataFrame(data, columns = ['term', 'tfidf', 'len_term'])
+    for i in range(len(ranking["term"])):
+        ranking.iat[i, 2] = len(ranking.iat[i, 0])*len(ranking.iat[i, 0])*ranking.iat[i, 1]
+    ranking = ranking.sort_values('len_term', ascending=False)
+
+    #return tokens[max_indexs]
+
+    return ranking[:top]['term'].tolist()
+
+CompanyVector = {}
+for company in Companies:
+    print(company,"keywords:")
+    a = get_tfidf_tool(CompanyArticles[company]["up"], top = 50)
+    b = get_tfidf_tool(CompanyArticles[company]["down"], top = 50)
+    CompanyVector[company] = list(set(a+b))
+
+def TestOn2018(company):
+    print(company,": \n")
+    up = list(set(CompanyArticles[company]["up"]))
+    down = list(set(CompanyArticles[company]["down"]))
+    not_obvious = list(set(CompanyArticles[company]["up_down_not_obvious"]))
+    
+    up_2018 = list(set(TestArticles[company]["up"]))
+    down_2018 = list(set(TestArticles[company]["down"]))
+    not_obvious_2018 = list(set(TestArticles[company]["up_down_not_obvious"]))
+
+    sample = 50
+    print(len(up),len(down),len(not_obvious))
+    not_obvious = not_obvious[:sample]
+    not_obvious_2018 = not_obvious_2018[:sample]
+    
+    train = np.array(up + down + not_obvious)
+    trainLabel = np.array(["up"] * len(up) + ["down"] * len(down)+["not_obvious"]*sample)
+    
+    test = np.array(up_2018 + down_2018 + not_obvious_2018)
+    testLabel = np.array(["up"] * len(up_2018) + ["down"] * len(down_2018)+["not_obvious"]*sample)
+    
+    Correct = 0
+    Error = 0
+    TP = 0
+    FP = 0
+    FN = 0
+    Action = 0
+
+    token = CompanyVector[company]
+    X = np.zeros((len(train), len(token))) # (row, column)
+    for i in range(len(X)):
+        for j in range(len(token)):
+            X[i, j] = train[i].count(token[j])
+
+    clf = SVC(gamma='auto')
+    clf.fit(X, trainLabel)
+    
+    for i in range(len(test)):
+        test_vector = np.array([token])
+        test_vector = np.array(test_vector)
+        for j in range(len(token)):
+            test_vector[0, j] = test[i].count(token[j])
+
+        result = clf.predict(test_vector)[0]
+        print("result:",result)
+        if result == testLabel[i]:
+            Correct += 1
+            if testLabel[i] != "not_obvious":
+                TP += 1
+        else:
+            Error += 1
+            if(trainLabel[i] == "not_obvious"):
+                FP += 1
+            else:
+                FN += 1
+
+        if result != "not_obvious":
+            Action += 1
+    
+    print(Error, Correct, Action, TP, FP, FN)            
+    return Error, Correct, Action, TP, FP, FN
+
+Errors = []
+Corrects = []
+Ratio = []
+Actions = []
+
+for company in Companies:
+    Error, Correct, Action, TP, FP, FN = TestOn2018(company)
+    Errors.append(Error)
+    Corrects.append(Correct)
+
+    Ratio.append(float(Correct)/(Error+Correct))
+    Actions.append(float(Action)/(Error+Correct))
+    print(Error, Correct, Action)
+
+    precision = TP / (TP + FP)
+    recall = TP / (TP + FN)
+    #positive: 有反轉點
+    #false positive: 沒有反轉點 認為有
+    #fales negative: 有反轉點 覺得沒有
+
+print(pd.DataFrame({"company":Companies, "Error": Errors, "Correct": Corrects, "Rate": Ratio, "Action":Actions}))
+print("Precision", precision, "Recall", recall)
