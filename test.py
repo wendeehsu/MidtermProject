@@ -399,7 +399,6 @@ for company in Companies:
     CompanyVector[company] = list(set(a+b))
 
 def TestOn2018(company):
-    print(company,": \n")
     up = list(set(CompanyArticles[company]["up"]))
     down = list(set(CompanyArticles[company]["down"]))
     not_obvious = list(set(CompanyArticles[company]["up_down_not_obvious"]))
@@ -407,17 +406,12 @@ def TestOn2018(company):
     up_2018 = list(set(TestArticles[company]["up"]))
     down_2018 = list(set(TestArticles[company]["down"]))
     not_obvious_2018 = list(set(TestArticles[company]["up_down_not_obvious"]))
-
-    sample = 50
-    print(len(up),len(down),len(not_obvious))
-    not_obvious = not_obvious[:sample]
-    not_obvious_2018 = not_obvious_2018[:sample]
     
     train = np.array(up + down + not_obvious)
-    trainLabel = np.array(["up"] * len(up) + ["down"] * len(down)+["not_obvious"]*sample)
+    trainLabel = np.array(["up"] * len(up) + ["down"] * len(down)+["not_obvious"]*len(not_obvious))
     
     test = np.array(up_2018 + down_2018 + not_obvious_2018)
-    testLabel = np.array(["up"] * len(up_2018) + ["down"] * len(down_2018)+["not_obvious"]*sample)
+    testLabel = np.array(["up"] * len(up_2018) + ["down"] * len(down_2018)+["not_obvious"]*len(not_obvious_2018))
     
     Correct = 0
     Error = 0
@@ -464,7 +458,7 @@ Errors = []
 Corrects = []
 Ratio = []
 Actions = []
-
+precision, recall = 0, 0
 for company in Companies:
     Error, Correct, Action, TP, FP, FN = TestOn2018(company)
     Errors.append(Error)
@@ -474,11 +468,10 @@ for company in Companies:
     Actions.append(float(Action)/(Error+Correct))
     print(Error, Correct, Action)
 
-    precision = TP / (TP + FP)
-    recall = TP / (TP + FN)
-    #positive: 有反轉點
-    #false positive: 沒有反轉點 認為有
-    #fales negative: 有反轉點 覺得沒有
+    if TP + FP != 0:
+      precision = TP / (TP + FP)
+    if TP + FN != 0:
+      recall = TP / (TP + FN)
 
 print(pd.DataFrame({"company":Companies, "Error": Errors, "Correct": Corrects, "Rate": Ratio, "Action":Actions}))
 print("Precision", precision, "Recall", recall)
